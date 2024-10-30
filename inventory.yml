@@ -1,0 +1,6 @@
+all:
+  hosts:
+    postgres_server:
+      ansible_host: 192.168.1.10  # Cambia esto por la IP real del servidor PostgreSQL
+    nfs_server:
+      ansible_host: 192.168.1.11  # Cambia esto por la IP real del servidor NFS

@@ -1,0 +1,76 @@
+---
+- name: Configurar servidor NFS y PostgreSQL
+  hosts: all
+  become: yes
+  vars:
+    nfs_directory: /srv/backups
+    nfs_export: "{{ nfs_directory }} *(rw,sync,no_root_squash)"
+    postgresql_db_name: mi_base_de_datos
+    mount_point: /mnt/backups
+    nfs_server_ip: "{{ hostvars['nfs_server'].ansible_host }}"  # Obtener la IP del servidor NFS desde el inventario
+    backup_script: /usr/local/bin/backup_postgresql.sh
+    cron_job: "0 2 * * * {{ backup_script }}"
+
+  tasks:
+    - name: Instalar servicios necesarios en NFS y PostgreSQL
+      package:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ ansible_facts['os_family'] == 'Debian' and ['nfs-kernel-server', 'postgresql', 'nfs-common'] or ['nfs-utils', 'postgresql-server', 'nfs-utils'] }}"
+
+- name: Configurar servidor NFS
+  hosts: nfs_server
+  become: yes
+  tasks:
+    - name: Crear directorio para backups
+      file:
+        path: "{{ nfs_directory }}"
+        state: directory
+        mode: '0777'
+
+    - name: Configurar exportación NFS
+      lineinfile:
+        path: /etc/exports
+        line: "{{ nfs_export }}"
+        create: yes
+
+    - name: Reiniciar y habilitar servicio NFS
+      systemd:
+        name: nfs-server
+        enabled: yes
+        state: restarted
+
+- name: Configurar servidor PostgreSQL
+  hosts: postgres_server
+  become: yes
+  tasks:
+    - name: Inicializar base de datos PostgreSQL
+      postgresql_db:
+        name: "{{ postgresql_db_name }}"
+        state: present
+
+    - name: Crear punto de montaje para NFS
+      file:
+        path: "{{ mount_point }}"
+        state: directory
+
+    - name: Montar directorio NFS
+      mount:
+        path: "{{ mount_point }}"
+        src: "{{ nfs_server_ip }}:{{ nfs_directory }}"
+        fstype: nfs
+        opts: defaults
+        state: mounted
+
+    - name: Crear script de backup
+      copy:
+        dest: "{{ backup_script }}"
+        content: |
+          #!/bin/bash
+          PGPASSWORD=yourpassword pg_dump -U youruser {{ postgresql_db_name }} > {{ mount_point }}/backup_$(date +\%F).sql
+        mode: '0755'
+
+    - name: Configurar tarea de cron para backups
+      cron:
+        name: "Backup de PostgreSQL"
+        job: "{{ cron_job }}"
